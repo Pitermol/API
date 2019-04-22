@@ -1,54 +1,63 @@
 import requests
-import sys
-from geocode import geocode
-from bolder import bolder
-from geocode_search import geocode_search
-search_api_server = "https://search-maps.yandex.ru/v1/"
-text = [input() for _ in range(int(input()))]
-circle = [input() for _ in range(int(input()))]
-org = []
-r=[]
-for i in circle:
-    for g in text:
-        address_ll = geocode_search(i)
-        search_params = {
-            "apikey": 'dda3ddba-c9ea-4ead-9010-f43fbc15c6e3',
-            "text": g,
-            "lang": "ru_RU",
-            "ll": address_ll,
-            "spn": bolder(i),
-            "type": "biz",
-            "results": 500
+import math
+from flask import Flask, request
+import logging
+import json
+# импортируем функции из нашего второго файла geo
+from geo import get_distance, get_geo_info
+
+app = Flask(__name__)
+
+# Добавляем логирование в файл. Чтобы найти файл,
+# перейдите на pythonwhere в раздел files, он лежит в корневой папке
+logging.basicConfig(level=logging.INFO, filename='app.log',
+                    format='%(asctime)s %(levelname)s %(name)s %(message)s')
+
+
+@app.route('/post', methods=['POST'])
+def main():
+    logging.info('Request: %r', request.json)
+    response = {
+        'session': request.json['session'],
+        'version': request.json['version'],
+        'response': {
+            'end_session': False
         }
-        response = requests.get(search_api_server, params=search_params)
-        if not response:
-            pass
-        json_response = response.json()
+    }
+    handle_dialog(response, request.json)
+    logging.info('Request: %r', response)
+    return json.dumps(response)
 
-        # print(search_params['ll'])
-        # print(search_params['spn'])
-        organization1 = json_response["features"]
-        organization11 = []
-        delta = "0.005"
-        for o in organization1:
-            if o['properties']['CompanyMetaData']['name'] not in organization11:
-                organization11.append(o['properties']['CompanyMetaData']['name'])
-        organization1 = organization11[:]
 
-        # Собираем параметры для запроса к StaticMapsAPI:
-        map_params = {
-            # позиционируем карту центром на наш исходный адрес
-            "ll": address_ll,
-            # Радиус поиска
-            "spn": ",".join([delta, delta]),
-            # центр поиска
-            "l": "map",
-        }
+def handle_dialog(res, req):
+    user_id = req['session']['user_id']
+    if req['session']['new']:
+        res['response']['text'] = \
+            'Привет! Я могу показать город или сказать расстояние между городами!'
+        return
+    # Получаем города из нашего
+    cities = get_cities(req)
+    if not cities:
+        res['response']['text'] = 'Ты не написал название не одного города!'
+    elif len(cities) == 1:
+        res['response']['text'] = 'Этот город в стране - ' + \
+                                  get_geo_info('country', cities[0])
+    elif len(cities) == 2:
+        distance = get_distance(get_geo_info('coordinates', cities[0]), get_geo_info('coordinates', cities[1]))
+        res['response']['text'] = 'Расстояние между этими городами: ' + \
+                                  str(round(distance)) + ' км.'
+    else:
+        res['response']['text'] = 'Слишком много городов!'
 
-        map_api_server = "http://static-maps.yandex.ru/1.x/"
-        # ... и выполняем запрос
-        response = requests.get(map_api_server, params=map_params)
-        org.append(str(len(organization1)))
-for i in range(len(circle)):
-    for j in range(len(text)):
-        print(circle[i] + ',', text[j] + ':', org[i * len(circle) + j])
+
+def get_cities(req):
+    cities = []
+    for entity in req['request']['nlu']['entities']:
+        if entity['type'] == 'YANDEX.GEO':
+            if 'city' in entity['value']:
+                cities.append(entity['value']['city'])
+    return cities
+
+
+if __name__ == '__main__':
+    app.run()
